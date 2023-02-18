@@ -9,6 +9,23 @@
 #define YMIN -1.5
 #define YMAX 1.5
 
+void write_image(int *buffer, int width, int height) {
+    FILE *fp = fopen("mandelbrot.ppm", "wb");
+    fprintf(fp, "P6\n%d %d\n255\n", width, height);
+    for (int y = 0; y < height; y++) {
+        for (int x = 0; x < width; x++) {
+            int n = buffer[y * width + x];
+            unsigned char r = n % 256;
+            unsigned char g = n % 256;
+            unsigned char b = n % 256;
+            fputc(r, fp);
+            fputc(g, fp);
+            fputc(b, fp);
+        }
+    }
+    fclose(fp);
+}
+
 int mandelbrot(double x, double y) {
     double cx = x, cy = y;
     double zx = 0.0, zy = 0.0;
@@ -58,17 +75,9 @@ int main(int argc, char **argv) {
     MPI_Gatherv(buffer + my_displ, my_count, MPI_INT, buffer, counts, displs, MPI_INT, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
-        FILE *fp = fopen("mandelbrot.ppm", "wb");
-        fprintf(fp, "P6\n%d %d\n255\n", width, height);
-        for (y = 0; y < height; y++) {
-            for (x = 0; x < width; x++) {
-                int n = buffer[y * width + x];
-                unsigned char r = n % 256;
-                unsigned char g = n % 256;
-                unsigned char b = n % 256;
-                fputc(r, fp);
-                fputc(g, fp);
-                fputc(b, fp);
-            }
-        }
-        fclose
+        write_image(buffer, width, height);
+    }
+
+    MPI_Finalize();
+    return 0;
+}
