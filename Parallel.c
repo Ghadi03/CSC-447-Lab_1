@@ -1,82 +1,70 @@
-#include <mpi.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
+#include <mpi.h>
 
-#define MAX_ITER 1000
-#define XMIN -2.0
-#define XMAX 1.0
-#define YMIN -1.5
-#define YMAX 1.5
+#define WIDTH 1000
+#define HEIGHT 1000
+#define MAX_ITERATIONS 1000
 
-void write_image(int *buffer, int width, int height) {
-    FILE *fp = fopen("mandelbrot.ppm", "wb");
-    fprintf(fp, "P6\n%d %d\n255\n", width, height);
-    for (int y = 0; y < height; y++) {
-        for (int x = 0; x < width; x++) {
-            int n = buffer[y * width + x];
-            unsigned char r = n % 256;
-            unsigned char g = n % 256;
-            unsigned char b = n % 256;
-            fputc(r, fp);
-            fputc(g, fp);
-            fputc(b, fp);
-        }
-    }
-    fclose(fp);
-}
-
-int mandelbrot(double x, double y) {
-    double cx = x, cy = y;
-    double zx = 0.0, zy = 0.0;
-    int i;
-    for (i = 0; i < MAX_ITER; i++) {
-        double zx_new = zx * zx - zy * zy + cx;
-        double zy_new = 2 * zx * zy + cy;
-        zx = zx_new;
-        zy = zy_new;
-        if (sqrt(zx * zx + zy * zy) > 2.0) {
-            return i;
-        }
-    }
-    return 0;
-}
-
-int main(int argc, char **argv) {
-    int rank, size;
+int main(int argc, char *argv[]) {
     MPI_Init(&argc, &argv);
+    int rank, size;
     MPI_Comm_rank(MPI_COMM_WORLD, &rank);
     MPI_Comm_size(MPI_COMM_WORLD, &size);
 
-    int width = 640, height = 480;
-    int x, y;
-    double dx = (XMAX - XMIN) / width;
-    double dy = (YMAX - YMIN) / height;
-    int *counts = (int*)malloc(sizeof(int) * size);
-    int *displs = (int*)malloc(sizeof(int) * size);
-    int *buffer = (int*)malloc(sizeof(int) * width * height);
+    int rows_per_process = HEIGHT / size;
+    int remaining_rows = HEIGHT % size;
 
-    for (int i = 0; i < size; i++) {
-        counts[i] = (height / size) * width;
-        displs[i] = (height / size) * i * width;
+    int* local_mandelbrot = (int*)malloc(sizeof(int) * WIDTH * rows_per_process);
+
+    // calculate starting row for this process
+    int start_row = rank * rows_per_process;
+    if (rank < remaining_rows) {
+        rows_per_process++;
+        start_row += rank;
+    } else {
+        start_row += remaining_rows;
     }
-    counts[size-1] += (height % size) * width;
 
-    int my_count = counts[rank];
-    int my_displ = displs[rank];
-    for (y = 0; y < height / size; y++) {
-        for (x = 0; x < width; x++) {
-            double cx = XMIN + x * dx;
-            double cy = YMIN + (my_displ / width + y) * dy;
-            buffer[my_displ + y * width + x] = mandelbrot(cx, cy);
+    for (int i = 0; i < rows_per_process; i++) {
+        int y = start_row + i;
+        for (int x = 0; x < WIDTH; x++) {
+            double zx = 0.0;
+            double zy = 0.0;
+            double cx = ((double)x - WIDTH/2) * 4.0/WIDTH;
+            double cy = ((double)y - HEIGHT/2) * 4.0/WIDTH;
+            int iterations = 0;
+            while (zx*zx + zy*zy < 4 && iterations < MAX_ITERATIONS) {
+                double new_zx = zx*zx - zy*zy + cx;
+                double new_zy = 2*zx*zy + cy;
+                zx = new_zx;
+                zy = new_zy;
+                iterations++;
+            }
+            local_mandelbrot[i*WIDTH + x] = iterations;
         }
     }
 
-    MPI_Gatherv(buffer + my_displ, my_count, MPI_INT, buffer, counts, displs, MPI_INT, 0, MPI_COMM_WORLD);
+    int* global_mandelbrot = NULL;
+    if (rank == 0) {
+        global_mandelbrot = (int*)malloc(sizeof(int) * WIDTH * HEIGHT);
+    }
+
+    MPI_Gather(local_mandelbrot, WIDTH * rows_per_process, MPI_INT, global_mandelbrot, WIDTH * rows_per_process, MPI_INT, 0, MPI_COMM_WORLD);
 
     if (rank == 0) {
-        write_image(buffer, width, height);
+        // output the mandelbrot set as a PGM image
+        printf("P2\n%d %d\n%d\n", WIDTH, HEIGHT, MAX_ITERATIONS);
+        for (int i = 0; i < HEIGHT; i++) {
+            for (int j = 0; j < WIDTH; j++) {
+                printf("%d ", global_mandelbrot[i*WIDTH + j]);
+            }
+            printf("\n");
+        }
+        free(global_mandelbrot);
     }
+
+    free(local_mandelbrot);
 
     MPI_Finalize();
     return 0;
